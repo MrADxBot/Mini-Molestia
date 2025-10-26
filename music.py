@@ -108,7 +108,6 @@ def download_song_as_mp3(youtube_url, output_path="."):
         return None
     except Exception as e:
         print("Ошибка скачивания: {e}")
-        return download_song_as_mp3(youtube_url, output_path=".")
 
 def search_song_YTM(song_name):
     try:
