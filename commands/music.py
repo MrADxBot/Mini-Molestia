@@ -44,7 +44,7 @@ def command(bot):
                 bot.send_document(message.chat.id, f)
             os.remove(file_path)
         else:
-            bot.send_message(message.chat.id, "Файл не найден после скачивания.")
+            print("Файл не найден после скачивания.")
             
 def get_song_info_from_spotify(spotify_url):
     """

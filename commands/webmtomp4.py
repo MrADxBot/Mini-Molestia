@@ -20,7 +20,7 @@ def command(bot):
             os.remove(output_file)
 
         except Exception as e:
-            bot.send_message(chat_id=message.chat.id, text=f"Ошибка при конвертации: {e}")
+            print("Ошибка при конвертации: {e}")
 
 def webt_to_mp4(input_file, output_file):
     command = [
