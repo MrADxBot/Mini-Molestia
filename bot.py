@@ -3,7 +3,8 @@ from telebot import types
 from dotenv import load_dotenv
 import os
 import requests
-from music import command as command_music
+from commands.music import command as command_music
+from commands.webmtomp4 import command as command_convert
 
 # Создание бота и указание токена
 load_dotenv()
@@ -12,13 +13,15 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+#Блок дополнительных команд
 command_music(bot)
+command_convert(bot)
 
+#Блок основных команд
 @bot.message_handler(commands=['ping'])
 def check_ping(message):
     try:
         bot.send_message(message.chat.id, "Бот работает!")
-        requests.post(DISCORD_WEBHOOK, data={'content': 'Тест'})
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 

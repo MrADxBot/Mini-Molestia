@@ -1,9 +1,9 @@
 import re
-from bs4 import BeautifulSoup
-import requests
 import os
-from ytmusicapi import YTMusic
 import yt_dlp
+import requests
+from bs4 import BeautifulSoup
+from ytmusicapi import YTMusic
 
 def command(bot):
     @bot.message_handler(commands=['music'])
