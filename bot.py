@@ -7,7 +7,7 @@ from commands.music import command as command_music
 from commands.webmtomp4 import command as command_convert
 
 # Создание бота и указание токена
-load_dotenv()
+load_dotenv(".env.test")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
@@ -35,9 +35,14 @@ def handle_channel_photo(message):
         with open(temp_filename, 'wb') as f:
             f.write(file_data)
 
+        caption = message.caption or ""
+
         with open(temp_filename, 'rb') as f:
             files = {'file': f}
-            requests.post(DISCORD_WEBHOOK, files=files)
+            data = {
+                'content': caption
+            }
+            requests.post(DISCORD_WEBHOOK, files=files, data=data)
 
         print(f"Фото переслано в Discord ({message.chat.title})")
 
