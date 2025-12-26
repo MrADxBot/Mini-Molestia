@@ -7,7 +7,7 @@ from commands.music import command as command_music
 from commands.webmtomp4 import command as command_convert
 
 # Создание бота и указание токена
-load_dotenv(".env.test")
+load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
