@@ -3,11 +3,14 @@ from telebot import types
 from dotenv import load_dotenv
 import os
 import requests
+import json
+from io import BytesIO
 from commands.music import command as command_music
 from commands.webmtomp4 import command as command_convert
 
 # Создание бота и указание токена
-load_dotenv()
+load_dotenv(".env") 
+# load_dotenv(".env.test", override=True)  
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
