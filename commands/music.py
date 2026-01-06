@@ -8,9 +8,34 @@ from ytmusicapi import YTMusic
 def command(bot):
     @bot.message_handler(commands=['music'])
     def music_command(message):
-        # bot.send_message(message.chat.id, "Отправьте ссылку на Spotify для скачивания песни.")
-        bot.register_next_step_handler(message, handle_spotify_link)
+        bot.send_message(message.chat.id, "Отправьте название трека или ссылку на Spotify или Youtube.")
+        bot.register_next_step_handler(message, check_input)
 
+    def check_input(message):
+        text = message.text
+        if is_spotify_url(text):
+            youtube_url = handle_spotify_link(message)
+        elif is_youtube_url(text):
+            youtube_url = text
+        else:
+            youtube_url = search_song_YTM(text)
+
+        bot.send_message(message.chat.id, f"Ссылка на аудио с YouTube: {youtube_url}")
+        error = download_song_as_mp3(youtube_url)
+        if error:
+            bot.send_message(message.chat.id, f"Ошибка скачивания: {error}")
+            return
+
+        # Отправка mp3 пользователю
+        files = [f for f in os.listdir('.') if f.endswith('.mp3')]
+        if files:
+            file_path = files[-1]
+            with open(file_path, 'rb') as f:
+                bot.send_document(message.chat.id, f)
+            os.remove(file_path)
+        else:
+            print("Файл не найден после скачивания.")
+            
     def handle_spotify_link(message):
         spotify_url = message.text.strip()
         
@@ -29,22 +54,8 @@ def command(bot):
         if not youtube_url:
             bot.send_message(message.chat.id, "Не удалось найти трек на YouTube.")
             return
-
-        bot.send_message(message.chat.id, "Скачиваю аудио с YouTube...")
-        error = download_song_as_mp3(youtube_url)
-        if error:
-            bot.send_message(message.chat.id, f"Ошибка скачивания: {error}")
-            return
-
-        # Отправка mp3 пользователю
-        files = [f for f in os.listdir('.') if f.endswith('.mp3')]
-        if files:
-            file_path = files[-1]
-            with open(file_path, 'rb') as f:
-                bot.send_document(message.chat.id, f)
-            os.remove(file_path)
         else:
-            print("Файл не найден после скачивания.")
+            return youtube_url
             
 def get_song_info_from_spotify(spotify_url):
     """
@@ -84,6 +95,8 @@ def get_song_info_from_spotify(spotify_url):
 def is_spotify_url(text):
     return "open.spotify.com/track" in text
 
+def is_youtube_url(text):
+    return "youtube.com/watch" in text or "youtu.be/" in text
 
 def download_song_as_mp3(youtube_url, output_path="."):
     """
