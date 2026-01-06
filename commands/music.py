@@ -20,7 +20,13 @@ def command(bot):
         else:
             youtube_url = search_song_YTM(text)
 
+        # Проверяем, что получили валидную ссылку
+        if not youtube_url or not str(youtube_url).startswith("http"):
+            bot.send_message(message.chat.id, f"Не удалось получить ссылку на YouTube: {youtube_url}")
+            return
+
         bot.send_message(message.chat.id, f"Ссылка на аудио с YouTube: {youtube_url}")
+        bot.send_message(message.chat.id, "Начинаю скачивание, это может занять некоторое время...")
         error = download_song_as_mp3(youtube_url)
         if error:
             bot.send_message(message.chat.id, f"Ошибка скачивания: {error}")
@@ -42,20 +48,17 @@ def command(bot):
         song, artist, error = get_song_info_from_spotify(spotify_url)
         if error:
             bot.send_message(message.chat.id, f"Ошибка: {error}")
-            return
+            return None
 
         bot.send_message(message.chat.id, f"Песня: {song}\nИсполнитель: {artist}")
 
-        # Поиск на YouTube и скачивание mp3
+        # Поиск на YouTube
         search_query = f"{song} {artist}"
-        while artist == "Spotify":
-            song, artist, error = get_song_info_from_spotify(spotify_url) 
         youtube_url = search_song_YTM(search_query)
         if not youtube_url:
             bot.send_message(message.chat.id, "Не удалось найти трек на YouTube.")
-            return
-        else:
-            return youtube_url
+            return None
+        return youtube_url
             
 def get_song_info_from_spotify(spotify_url):
     """
@@ -103,24 +106,32 @@ def download_song_as_mp3(youtube_url, output_path="."):
     Скачивает аудио с YouTube-ссылки и сохраняет как mp3.
     Требуется установленный yt-dlp и ffmpeg.
     """
-    try:
-        ydl_opts = {
-            'format': 'bestaudio',
-            'outtmpl': f'{output_path}/%(title)s.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'noplaylist': True,
-            'no_warnings': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
-        return None
-    except Exception as e:
-        print("Ошибка скачивания: {e}")
+    # Попробуем несколько попыток и увеличим таймаут соединения
+    ydl_opts = {
+        'format': 'bestaudio',
+        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'noplaylist': True,
+        'no_warnings': True,
+        # Увеличиваем таймаут сокета (сек)
+        'socket_timeout': 60,
+    }
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([youtube_url])
+            return None
+        except Exception as e:
+            last_err = e
+    # Если не получилось после попыток, возвращаем ошибку строкой
+    return f"Ошибка скачивания: {last_err}"
 
 def search_song_YTM(song_name):
     try:
@@ -138,14 +149,14 @@ def search_song_YTM(song_name):
             # Получаем идентификатор видео
             video_id = first_result.get("videoId", "")
 
-            # Если videoId существует, формируем ссылку
+            # Если videoId существует, формируем обычную youtube.com ссылку
             if video_id:
-                song_url = f"https://music.youtube.com/watch?v={video_id}"
+                song_url = f"https://www.youtube.com/watch?v={video_id}"
                 return song_url
             else:
-                return "Не удалось найти идентификатор видео для этой песни"
+                return None
         else:
-            return "Песня не найдена"
+            return None
     except Exception as e:
         print(f"YTMusic поиск не удался: {e}")
 
@@ -158,6 +169,6 @@ def search_song_YTM(song_name):
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch:{song_name}", download=False)['entries'][0]
-            return info['webpage_url']
+            return info.get('webpage_url')
     except Exception as e2:
-        return f"Не удалось найти песню через yt-dlp: {e2}"
+        return None
