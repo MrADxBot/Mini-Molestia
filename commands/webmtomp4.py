@@ -2,7 +2,10 @@ import os
 import subprocess
 
 def command(bot):
-    @bot.channel_post_handler(func=lambda message: message.content_type == 'document' and message.document and message.document.mime_type == 'video/webm')
+    @bot.channel_post_handler(
+        func=lambda message: message.content_type == 'document' and message.document and message.document.mime_type == 'video/webm',
+        content_types=['document'],
+    )
     def transform(message):
         try:
             if message.content_type != 'document':
