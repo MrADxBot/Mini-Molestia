@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 import os
 import requests
 import json
-from io import BytesIO
 from commands.music import command as command_music
 from commands.webmtomp4 import command as command_convert
 
@@ -28,28 +27,52 @@ def check_ping(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
-@bot.channel_post_handler(content_types=['photo'])
-def handle_channel_photo(message):
+def send_to_discord(content="", file_payload=None):
+    data = {'content': content}
+    if file_payload:
+        requests.post(DISCORD_WEBHOOK, data=data, files={'file': file_payload})
+    else:
+        requests.post(DISCORD_WEBHOOK, data=data)
+
+
+@bot.channel_post_handler(content_types=['text', 'photo', 'document', 'video'])
+def handle_channel_post(message):
     try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        file_data = bot.download_file(file_info.file_path)
+        text = message.text or message.caption or ""
 
-        temp_filename = "temp.jpg"
-        with open(temp_filename, 'wb') as f:
-            f.write(file_data)
+        if message.content_type == 'text':
+            send_to_discord(content=text)
+            print(f"Сообщение переслано в Discord ({message.chat.title})")
+            return
 
-        caption = message.caption or ""
+        if message.content_type == 'photo':
+            file_info = bot.get_file(message.photo[-1].file_id)
+            file_data = bot.download_file(file_info.file_path)
+            filename = f"photo_{message.message_id}.jpg"
+            send_to_discord(content=text, file_payload=(filename, file_data, 'image/jpeg'))
+            print(f"Фото переслано в Discord ({message.chat.title})")
+            return
 
-        with open(temp_filename, 'rb') as f:
-            files = {'file': f}
-            data = {
-                'content': caption
-            }
-            requests.post(DISCORD_WEBHOOK, files=files, data=data)
+        if message.content_type == 'document':
+            # Не дублируем обработку webm: этим занимается отдельная команда.
+            if message.document and message.document.mime_type == 'video/webm':
+                return
 
-        print(f"Фото переслано в Discord ({message.chat.title})")
+            file_info = bot.get_file(message.document.file_id)
+            file_data = bot.download_file(file_info.file_path)
+            filename = message.document.file_name or f"file_{message.message_id}"
+            mime_type = message.document.mime_type or 'application/octet-stream'
+            send_to_discord(content=text, file_payload=(filename, file_data, mime_type))
+            print(f"Файл переслан в Discord ({message.chat.title})")
+            return
 
-        os.remove(temp_filename)
+        if message.content_type == 'video':
+            file_info = bot.get_file(message.video.file_id)
+            file_data = bot.download_file(file_info.file_path)
+            filename = f"video_{message.message_id}.mp4"
+            send_to_discord(content=text, file_payload=(filename, file_data, 'video/mp4'))
+            print(f"Видео переслано в Discord ({message.chat.title})")
+            return
     except Exception as e:
         print(f"Ошибка при пересылке: {e}")
 
