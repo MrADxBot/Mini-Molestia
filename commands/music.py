@@ -150,9 +150,10 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
 
     # Сначала пробуем без авторизации: это быстрее и часто достаточно.
     no_auth_clients = ['android', 'web']
-    no_auth_formats = ['best', '18/best', 'bestaudio/best/worstaudio']
+    no_auth_formats = ['18/best', 'bestaudio/best/worstaudio', 'best']
 
     auth_configured = bool(cookies_file or (use_browser_cookies and browser_cookies))
+    saw_sign_in_required = False
     last_error = None
 
     for client in no_auth_clients:
@@ -167,10 +168,12 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                     ydl.download([normalized_url])
                 return None
             except Exception as e:
+                if is_sign_in_required_error(e):
+                    saw_sign_in_required = True
                 last_error = e
 
     # Только при явной необходимости пробуем с cookies и только web-клиент.
-    if is_sign_in_required_error(last_error) and auth_configured:
+    if saw_sign_in_required and auth_configured:
         auth_attempts = []
         if cookies_file:
             auth_attempts.append({'cookiefile': cookies_file})
@@ -193,7 +196,7 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                 except Exception as e:
                     last_error = e
 
-    if is_sign_in_required_error(last_error) and not auth_configured:
+    if saw_sign_in_required and not auth_configured:
         return (
             'YouTube требует авторизацию. Укажите cookies через '
             'YTDLP_COOKIES_FILE=/path/to/cookies.txt или включите '
