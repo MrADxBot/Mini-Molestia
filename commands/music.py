@@ -146,11 +146,12 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
         },
         'retries': 2,
         'extractor_retries': 2,
+        'js_runtimes': ['node'],
     }
 
     # Сначала пробуем без авторизации: это быстрее и часто достаточно.
-    no_auth_clients = ['android', 'web']
-    no_auth_formats = ['18/best', 'bestaudio/best/worstaudio', 'best']
+    no_auth_clients = ['android', 'mweb', 'tv', 'web']
+    no_auth_formats = ['18/best', 'bestaudio/best', 'best']
 
     auth_configured = bool(cookies_file or (use_browser_cookies and browser_cookies))
     saw_sign_in_required = False
@@ -211,7 +212,8 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                 'quiet': False,
                 'noplaylist': True,
                 'no_warnings': False,
-                'extractor_args': get_youtube_extractor_args(search_client)
+                'extractor_args': get_youtube_extractor_args(search_client),
+                'js_runtimes': ['node']
             }
             if cookies_file:
                 search_opts['cookiefile'] = cookies_file
@@ -268,7 +270,8 @@ def search_song_YTM(song_name):
         ydl_opts = {
             "format": "bestaudio/best",
             "noplaylist": True,
-            "quiet": True
+            "quiet": True,
+            "js_runtimes": ["node"]
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch:{song_name}", download=False)['entries'][0]
