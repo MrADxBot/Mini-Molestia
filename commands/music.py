@@ -85,10 +85,11 @@ def is_spotify_url(text):
     return "open.spotify.com/track" in text
 
 
-def get_youtube_extractor_args():
-    extractor_args = {'youtube': {'player_client': ['web', 'android']}}
+def get_youtube_extractor_args(player_client=None):
+    selected_client = (player_client or os.getenv('YTDLP_PO_CLIENT', 'android')).strip() or 'android'
+    extractor_args = {'youtube': {'player_client': [selected_client]}}
     po_token = os.getenv('YTDLP_PO_TOKEN', '').strip()
-    po_client = os.getenv('YTDLP_PO_CLIENT', 'web').strip() or 'web'
+    po_client = selected_client
     if po_token:
         extractor_args['youtube']['po_token'] = [f'{po_client}.gvs+{po_token}']
     return extractor_args
@@ -96,6 +97,13 @@ def get_youtube_extractor_args():
 
 def str_to_bool(value):
     return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def is_sign_in_required_error(error):
+    if not error:
+        return False
+    text = str(error).lower()
+    return 'sign in to confirm you\'re not a bot' in text or 'use --cookies' in text
 
 
 def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
@@ -106,6 +114,9 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
     normalized_url = youtube_url.replace("music.youtube.com", "www.youtube.com")
 
     use_browser_cookies = str_to_bool(os.getenv('YTDLP_USE_BROWSER_COOKIES', '0'))
+    browser_cookies_env = os.getenv('YTDLP_BROWSER_COOKIES', 'chrome,firefox,edge')
+    browser_cookies = [b.strip() for b in browser_cookies_env.split(',') if b.strip()]
+    cookies_file = os.getenv('YTDLP_COOKIES_FILE', '').strip()
     require_po_token = str_to_bool(os.getenv('YTDLP_REQUIRE_PO_TOKEN', '0'))
     po_token = os.getenv('YTDLP_PO_TOKEN', '').strip()
 
@@ -115,6 +126,9 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
             'Задайте переменную окружения YTDLP_PO_TOKEN '
             'и при необходимости YTDLP_PO_CLIENT=web или android.'
         )
+
+    if cookies_file and not os.path.isfile(cookies_file):
+        return f'Файл cookies не найден: {cookies_file}'
 
     base_opts = {
         'outtmpl': f'{output_path}/%(title)s.%(ext)s',
@@ -130,46 +144,86 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         },
-        'extractor_args': get_youtube_extractor_args(),
+        'retries': 2,
+        'extractor_retries': 2,
     }
 
-    # Server-safe defaults: no browser cookies unless explicitly enabled.
-    attempts = [
-        {'format': 'bestaudio/best/worstaudio'},
-        {'format': 'best'}
-    ]
+    # Сначала пробуем без авторизации: это быстрее и часто достаточно.
+    no_auth_clients = ['android', 'web']
+    no_auth_formats = ['best', '18/best', 'bestaudio/best/worstaudio']
 
-    if use_browser_cookies:
-        attempts = [
-            {'format': 'bestaudio/best/worstaudio', 'cookiesfrombrowser': ('chrome',)},
-            {'format': 'bestaudio/best/worstaudio', 'cookiesfrombrowser': ('firefox',)},
-            *attempts,
-            {'format': 'best', 'cookiesfrombrowser': ('chrome',)},
-            {'format': 'best', 'cookiesfrombrowser': ('firefox',)},
-        ]
-
+    auth_configured = bool(cookies_file or (use_browser_cookies and browser_cookies))
     last_error = None
-    for attempt in attempts:
-        try:
-            ydl_opts = {**base_opts, **attempt}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([normalized_url])
-            return None
-        except Exception as e:
-            last_error = e
+
+    for client in no_auth_clients:
+        for fmt in no_auth_formats:
+            try:
+                ydl_opts = {
+                    **base_opts,
+                    'format': fmt,
+                    'extractor_args': get_youtube_extractor_args(client),
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([normalized_url])
+                return None
+            except Exception as e:
+                last_error = e
+
+    # Только при явной необходимости пробуем с cookies и только web-клиент.
+    if is_sign_in_required_error(last_error) and auth_configured:
+        auth_attempts = []
+        if cookies_file:
+            auth_attempts.append({'cookiefile': cookies_file})
+        if use_browser_cookies:
+            for browser in browser_cookies:
+                auth_attempts.append({'cookiesfrombrowser': (browser,)})
+
+        for auth_attempt in auth_attempts:
+            for fmt in no_auth_formats:
+                try:
+                    ydl_opts = {
+                        **base_opts,
+                        **auth_attempt,
+                        'format': fmt,
+                        'extractor_args': get_youtube_extractor_args('web'),
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([normalized_url])
+                    return None
+                except Exception as e:
+                    last_error = e
+
+    if is_sign_in_required_error(last_error) and not auth_configured:
+        return (
+            'YouTube требует авторизацию. Укажите cookies через '
+            'YTDLP_COOKIES_FILE=/path/to/cookies.txt или включите '
+            'YTDLP_USE_BROWSER_COOKIES=1 (и опционально YTDLP_BROWSER_COOKIES=chrome,firefox,edge).'
+        )
 
     # Fallback: search by title+artist and download first playable result.
     if search_query:
         try:
-            with yt_dlp.YoutubeDL({'quiet': False, 'noplaylist': True, 'no_warnings': False}) as ydl:
+            search_client = 'web' if cookies_file else 'android'
+            search_opts = {
+                'quiet': False,
+                'noplaylist': True,
+                'no_warnings': False,
+                'extractor_args': get_youtube_extractor_args(search_client)
+            }
+            if cookies_file:
+                search_opts['cookiefile'] = cookies_file
+            with yt_dlp.YoutubeDL(search_opts) as ydl:
                 info = ydl.extract_info(f"ytsearch1:{search_query} official audio", download=False)
             entries = info.get('entries') or []
             if entries and entries[0].get('webpage_url'):
                 fallback_url = entries[0]['webpage_url']
                 ydl_opts = {
                     **base_opts,
-                    'format': 'best'
+                    'format': 'best',
+                    'extractor_args': get_youtube_extractor_args(search_client)
                 }
+                if cookies_file:
+                    ydl_opts['cookiefile'] = cookies_file
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([fallback_url])
                 return None
