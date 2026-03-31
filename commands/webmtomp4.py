@@ -2,9 +2,18 @@ import os
 import subprocess
 
 def command(bot):
-    @bot.channel_post_handler(func=lambda message: message.document.mime_type == 'video/webm', content_types=['document']) 
+    @bot.channel_post_handler(
+        func=lambda message: message.content_type == 'document' and message.document and message.document.mime_type == 'video/webm',
+        content_types=['document'],
+    )
     def transform(message):
         try:
+            if message.content_type != 'document':
+                return
+
+            if not message.document or message.document.mime_type != 'video/webm':
+                return
+
             file_info = bot.get_file(message.document.file_id)
             file = message.document.file_name
             with open(file, 'wb') as f:
