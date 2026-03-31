@@ -31,7 +31,7 @@ def command(bot):
             return
 
         bot.send_message(message.chat.id, "Скачиваю аудио с YouTube...")
-        error = download_song_as_mp3(youtube_url)
+        error = download_song_as_mp3(youtube_url, search_query=search_query)
         if error:
             bot.send_message(message.chat.id, f"Ошибка скачивания: {error}")
             return
@@ -85,29 +85,99 @@ def is_spotify_url(text):
     return "open.spotify.com/track" in text
 
 
-def download_song_as_mp3(youtube_url, output_path="."):
+def get_youtube_extractor_args():
+    extractor_args = {'youtube': {'player_client': ['web', 'android']}}
+    po_token = os.getenv('YTDLP_PO_TOKEN', '').strip()
+    po_client = os.getenv('YTDLP_PO_CLIENT', 'web').strip() or 'web'
+    if po_token:
+        extractor_args['youtube']['po_token'] = [f'{po_client}.gvs+{po_token}']
+    return extractor_args
+
+
+def str_to_bool(value):
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
     """
     Скачивает аудио с YouTube-ссылки и сохраняет как mp3.
     Требуется установленный yt-dlp и ffmpeg.
     """
-    try:
-        ydl_opts = {
-            'format': 'bestaudio',
-            'outtmpl': f'{output_path}/%(title)s.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'noplaylist': True,
-            'no_warnings': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
-        return None
-    except Exception as e:
-        print("Ошибка скачивания: {e}")
+    normalized_url = youtube_url.replace("music.youtube.com", "www.youtube.com")
+
+    use_browser_cookies = str_to_bool(os.getenv('YTDLP_USE_BROWSER_COOKIES', '0'))
+    require_po_token = str_to_bool(os.getenv('YTDLP_REQUIRE_PO_TOKEN', '0'))
+    po_token = os.getenv('YTDLP_PO_TOKEN', '').strip()
+
+    if require_po_token and not po_token:
+        return (
+            'Для сервера требуется PO token. '
+            'Задайте переменную окружения YTDLP_PO_TOKEN '
+            'и при необходимости YTDLP_PO_CLIENT=web или android.'
+        )
+
+    base_opts = {
+        'outtmpl': f'{output_path}/%(title)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': False,
+        'noplaylist': True,
+        'no_warnings': False,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
+        'extractor_args': get_youtube_extractor_args(),
+    }
+
+    # Server-safe defaults: no browser cookies unless explicitly enabled.
+    attempts = [
+        {'format': 'bestaudio/best/worstaudio'},
+        {'format': 'best'}
+    ]
+
+    if use_browser_cookies:
+        attempts = [
+            {'format': 'bestaudio/best/worstaudio', 'cookiesfrombrowser': ('chrome',)},
+            {'format': 'bestaudio/best/worstaudio', 'cookiesfrombrowser': ('firefox',)},
+            *attempts,
+            {'format': 'best', 'cookiesfrombrowser': ('chrome',)},
+            {'format': 'best', 'cookiesfrombrowser': ('firefox',)},
+        ]
+
+    last_error = None
+    for attempt in attempts:
+        try:
+            ydl_opts = {**base_opts, **attempt}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([normalized_url])
+            return None
+        except Exception as e:
+            last_error = e
+
+    # Fallback: search by title+artist and download first playable result.
+    if search_query:
+        try:
+            with yt_dlp.YoutubeDL({'quiet': False, 'noplaylist': True, 'no_warnings': False}) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{search_query} official audio", download=False)
+            entries = info.get('entries') or []
+            if entries and entries[0].get('webpage_url'):
+                fallback_url = entries[0]['webpage_url']
+                ydl_opts = {
+                    **base_opts,
+                    'format': 'best'
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([fallback_url])
+                return None
+        except Exception as e:
+            last_error = e
+
+    print(f"Ошибка скачивания: {last_error}")
+    return str(last_error)
 
 def search_song_YTM(song_name):
     try:
