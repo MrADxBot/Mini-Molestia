@@ -1,50 +1,56 @@
-import re
 import os
-import yt_dlp
+import re
+import shutil
+import tempfile
+
 import requests
+import yt_dlp
 from bs4 import BeautifulSoup
-from ytmusicapi import YTMusic
 
 def command(bot):
     @bot.message_handler(commands=['music'])
     def music_command(message):
-        # bot.send_message(message.chat.id, "Отправьте ссылку на Spotify для скачивания песни.")
+        bot.send_message(message.chat.id, "Отправьте ссылку на трек в Spotify.")
         bot.register_next_step_handler(message, handle_spotify_link)
 
     def handle_spotify_link(message):
-        spotify_url = message.text.strip()
-        
+        spotify_url = (message.text or "").strip()
+
+        if not spotify_url:
+            bot.send_message(message.chat.id, "Ссылка пуста. Пришлите ссылку на трек в Spotify.")
+            return
+
+        if not is_spotify_url(spotify_url):
+            bot.send_message(message.chat.id, "Нужна ссылка на конкретный трек Spotify.")
+            return
+
         song, artist, error = get_song_info_from_spotify(spotify_url)
         if error:
             bot.send_message(message.chat.id, f"Ошибка: {error}")
             return
 
-        bot.send_message(message.chat.id, f"Песня: {song}\nИсполнитель: {artist}")
+        search_query = f"{song} {artist}".strip()
+        bot.send_message(message.chat.id, f"Ищу трек: {search_query}")
 
-        # Поиск на YouTube и скачивание mp3
-        search_query = f"{song} {artist}"
-        while artist == "Spotify":
-            song, artist, error = get_song_info_from_spotify(spotify_url) 
-        youtube_url = search_song_YTM(search_query)
-        if not youtube_url:
-            bot.send_message(message.chat.id, "Не удалось найти трек на YouTube.")
+        youtube_url, search_error = search_song_youtube(search_query)
+        if search_error:
+            bot.send_message(message.chat.id, f"Не удалось найти трек: {search_error}")
             return
 
         bot.send_message(message.chat.id, "Скачиваю аудио с YouTube...")
-        error = download_song_as_mp3(youtube_url, search_query=search_query)
-        if error:
-            bot.send_message(message.chat.id, f"Ошибка скачивания: {error}")
+        file_path, temp_dir, download_error = download_song_as_mp3(youtube_url, search_query=search_query)
+        if download_error:
+            bot.send_message(message.chat.id, f"Ошибка скачивания: {download_error}")
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             return
 
-        # Отправка mp3 пользователю
-        files = [f for f in os.listdir('.') if f.endswith('.mp3')]
-        if files:
-            file_path = files[-1]
+        try:
             with open(file_path, 'rb') as f:
                 bot.send_document(message.chat.id, f)
-            os.remove(file_path)
-        else:
-            print("Файл не найден после скачивания.")
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             
 def get_song_info_from_spotify(spotify_url):
     """
@@ -85,6 +91,38 @@ def is_spotify_url(text):
     return "open.spotify.com/track" in text
 
 
+def search_song_youtube(search_query):
+    use_browser_cookies = str_to_bool(os.getenv('YTDLP_USE_BROWSER_COOKIES', '0'))
+    browser_cookies_env = os.getenv('YTDLP_BROWSER_COOKIES', 'chrome,firefox,edge')
+    browser_cookies = [b.strip() for b in browser_cookies_env.split(',') if b.strip()]
+    cookies_file = os.getenv('YTDLP_COOKIES_FILE', '').strip()
+
+    search_client = 'web' if cookies_file else os.getenv('YTDLP_SEARCH_CLIENT', 'android')
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'extractor_args': get_youtube_extractor_args(search_client),
+    }
+
+    if cookies_file:
+        ydl_opts['cookiefile'] = cookies_file
+    elif use_browser_cookies and browser_cookies:
+        # Используем первый доступный браузер для поиска, если нужно авторизоваться.
+        ydl_opts['cookiesfrombrowser'] = (browser_cookies[0],)
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch5:{search_query} official audio", download=False)
+        entries = info.get('entries') or []
+        for entry in entries:
+            if entry.get('webpage_url'):
+                return entry['webpage_url'], None
+        return None, "YouTube не вернул результатов"
+    except Exception as e:
+        return None, str(e)
+
+
 def get_youtube_extractor_args(player_client=None):
     selected_client = (player_client or os.getenv('YTDLP_PO_CLIENT', 'android')).strip() or 'android'
     extractor_args = {'youtube': {'player_client': [selected_client]}}
@@ -106,12 +144,13 @@ def is_sign_in_required_error(error):
     return 'sign in to confirm you\'re not a bot' in text or 'use --cookies' in text
 
 
-def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
+def download_song_as_mp3(youtube_url, search_query=None, output_path=None):
     """
     Скачивает аудио с YouTube-ссылки и сохраняет как mp3.
     Требуется установленный yt-dlp и ffmpeg.
     """
     normalized_url = youtube_url.replace("music.youtube.com", "www.youtube.com")
+    target_dir = output_path or tempfile.mkdtemp(prefix="music_bot_")
 
     use_browser_cookies = str_to_bool(os.getenv('YTDLP_USE_BROWSER_COOKIES', '0'))
     browser_cookies_env = os.getenv('YTDLP_BROWSER_COOKIES', 'chrome,firefox,edge')
@@ -121,34 +160,35 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
     po_token = os.getenv('YTDLP_PO_TOKEN', '').strip()
 
     if require_po_token and not po_token:
-        return (
+        return None, target_dir, (
             'Для сервера требуется PO token. '
             'Задайте переменную окружения YTDLP_PO_TOKEN '
             'и при необходимости YTDLP_PO_CLIENT=web или android.'
         )
 
     if cookies_file and not os.path.isfile(cookies_file):
-        return f'Файл cookies не найден: {cookies_file}'
+        return None, target_dir, f'Файл cookies не найден: {cookies_file}'
 
     base_opts = {
-        'outtmpl': f'{output_path}/%(title)s.%(ext)s',
+        'outtmpl': os.path.join(target_dir, '%(title).80s.%(ext)s'),
+        'restrictfilenames': True,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        'quiet': False,
+        'quiet': True,
         'noplaylist': True,
-        'no_warnings': False,
+        'no_warnings': True,
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
         },
         'retries': 2,
         'extractor_retries': 2,
+        'cachedir': False,
     }
 
-    # Сначала пробуем без авторизации: это быстрее и часто достаточно.
     no_auth_clients = ['android', 'mweb', 'tv', 'web']
     no_auth_formats = ['18/best', 'bestaudio/best', 'best']
 
@@ -166,13 +206,16 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([normalized_url])
-                return None
+                mp3_path = find_latest_mp3(target_dir)
+                if mp3_path:
+                    return mp3_path, target_dir, None
+                last_error = 'Файл mp3 не найден после скачивания'
             except Exception as e:
                 if is_sign_in_required_error(e):
                     saw_sign_in_required = True
                 last_error = e
 
-    # Только при явной необходимости пробуем с cookies и только web-клиент.
+    # На сервере YouTube чаще просит авторизацию: пробуем cookies/web-клиент только по необходимости.
     if saw_sign_in_required and auth_configured:
         auth_attempts = []
         if cookies_file:
@@ -192,25 +235,27 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                     }
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([normalized_url])
-                    return None
+                    mp3_path = find_latest_mp3(target_dir)
+                    if mp3_path:
+                        return mp3_path, target_dir, None
+                    last_error = 'Файл mp3 не найден после скачивания'
                 except Exception as e:
                     last_error = e
 
     if saw_sign_in_required and not auth_configured:
-        return (
+        return None, target_dir, (
             'YouTube требует авторизацию. Укажите cookies через '
             'YTDLP_COOKIES_FILE=/path/to/cookies.txt или включите '
             'YTDLP_USE_BROWSER_COOKIES=1 (и опционально YTDLP_BROWSER_COOKIES=chrome,firefox,edge).'
         )
 
-    # Fallback: search by title+artist and download first playable result.
     if search_query:
         try:
             search_client = 'web' if cookies_file else 'android'
             search_opts = {
-                'quiet': False,
+                'quiet': True,
                 'noplaylist': True,
-                'no_warnings': False,
+                'no_warnings': True,
                 'extractor_args': get_youtube_extractor_args(search_client),
             }
             if cookies_file:
@@ -223,55 +268,26 @@ def download_song_as_mp3(youtube_url, search_query=None, output_path="."):
                 ydl_opts = {
                     **base_opts,
                     'format': 'best',
-                    'extractor_args': get_youtube_extractor_args(search_client)
+                    'extractor_args': get_youtube_extractor_args(search_client),
                 }
                 if cookies_file:
                     ydl_opts['cookiefile'] = cookies_file
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([fallback_url])
-                return None
+                mp3_path = find_latest_mp3(target_dir)
+                if mp3_path:
+                    return mp3_path, target_dir, None
         except Exception as e:
             last_error = e
 
-    print(f"Ошибка скачивания: {last_error}")
-    return str(last_error)
+    return None, target_dir, str(last_error or 'Неизвестная ошибка')
 
-def search_song_YTM(song_name):
-    try:
-        # Инициализация API YouTube Music
-        ytmusic = YTMusic()
 
-        # Выполнение поиска по названию песни
-        search_results = ytmusic.search(song_name, filter="songs")
-
-        # Проверяем, есть ли результаты поиска
-        if search_results:
-            # Берем первый результат из списка
-            first_result = search_results[0]
-
-            # Получаем идентификатор видео
-            video_id = first_result.get("videoId", "")
-
-            # Если videoId существует, формируем ссылку
-            if video_id:
-                song_url = f"https://music.youtube.com/watch?v={video_id}"
-                return song_url
-            else:
-                return "Не удалось найти идентификатор видео для этой песни"
-        else:
-            return "Песня не найдена"
-    except Exception as e:
-        print(f"YTMusic поиск не удался: {e}")
-
-    # Запасной метод: через yt-dlp и обычный YouTube
-    try:
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "noplaylist": True,
-            "quiet": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)['entries'][0]
-            return info['webpage_url']
-    except Exception as e2:
-        return f"Не удалось найти песню через yt-dlp: {e2}"
+def find_latest_mp3(folder_path):
+    mp3_files = [
+        os.path.join(folder_path, f) for f in os.listdir(folder_path)
+        if f.lower().endswith('.mp3')
+    ]
+    if not mp3_files:
+        return None
+    return max(mp3_files, key=os.path.getmtime)
