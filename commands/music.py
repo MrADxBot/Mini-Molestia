@@ -1,9 +1,56 @@
 import re
 import os
+from typing import Any, cast
 import yt_dlp
 import requests
 from bs4 import BeautifulSoup
 from ytmusicapi import YTMusic
+
+
+def _is_truthy_env(value):
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_ytdlp_options(output_path="."):
+    ydl_opts: dict[str, Any] = {
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'noplaylist': True,
+        'no_warnings': True,
+        'socket_timeout': 60,
+        'retries': 3,
+        'fragment_retries': 3,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+            'Origin': 'https://www.youtube.com',
+            'Referer': 'https://www.youtube.com/',
+        },
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            },
+        },
+    }
+
+    cookies_file = os.getenv('YTDLP_COOKIES_FILE', 'secrets/cookies.txt')
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts['cookiefile'] = cookies_file
+    elif _is_truthy_env(os.getenv('YTDLP_USE_BROWSER_COOKIES')):
+        browser_cookie_source = os.getenv('YTDLP_BROWSER_COOKIES', '').split(',', 1)[0].strip()
+        if browser_cookie_source:
+            ydl_opts['cookiesfrombrowser'] = browser_cookie_source
+
+    if _is_truthy_env(os.getenv('YTDLP_REQUIRE_PO_TOKEN')):
+        ydl_opts['extractor_args']['youtube']['player_client'] = ['android', 'web', 'ios']
+
+    return ydl_opts
 
 def command(bot):
     @bot.message_handler(commands=['music'])
@@ -106,32 +153,25 @@ def download_song_as_mp3(youtube_url, output_path="."):
     Скачивает аудио с YouTube-ссылки и сохраняет как mp3.
     Требуется установленный yt-dlp и ffmpeg.
     """
-    # Попробуем несколько попыток и увеличим таймаут соединения
-    ydl_opts = {
-        'format': 'bestaudio',
-        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'noplaylist': True,
-        'no_warnings': True,
-        # Увеличиваем таймаут сокета (сек)
-        'socket_timeout': 60,
-    }
+    ydl_opts = _build_ytdlp_options(output_path)
 
     last_err = None
     for attempt in range(3):
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 ydl.download([youtube_url])
             return None
         except Exception as e:
             last_err = e
-    # Если не получилось после попыток, возвращаем ошибку строкой
-    return f"Ошибка скачивания: {last_err}"
+    error_text = str(last_err)
+    if '403' in error_text or 'Forbidden' in error_text:
+        return (
+            "YouTube отклонил запрос (403 Forbidden). "
+            "Проверьте cookies в secrets/cookies.txt или включите YTDLP_USE_BROWSER_COOKIES=1 и задайте YTDLP_BROWSER_COOKIES. "
+            f"Подробности: {error_text}"
+        )
+
+    return f"Ошибка скачивания: {error_text}"
 
 def search_song_YTM(song_name):
     try:
@@ -162,13 +202,16 @@ def search_song_YTM(song_name):
 
     # Запасной метод: через yt-dlp и обычный YouTube
     try:
-        ydl_opts = {
+        ydl_opts: dict[str, Any] = {
             "format": "bestaudio/best",
             "noplaylist": True,
             "quiet": True
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)['entries'][0]
-            return info.get('webpage_url')
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
+            info = cast(Any, ydl.extract_info(f"ytsearch:{song_name}", download=False))
+            entries = info.get('entries') or []
+            if not entries:
+                return None
+            return entries[0].get('webpage_url')
     except Exception as e2:
         return None
